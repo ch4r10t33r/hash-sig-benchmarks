@@ -46,6 +46,9 @@ benchmark: run
 quick: check-deps
 	@$(PYTHON) benchmark.py 5
 
+one: check-deps
+	@$(PYTHON) benchmark.py 1
+
 full: check-deps
 	@$(PYTHON) benchmark.py 50
 
