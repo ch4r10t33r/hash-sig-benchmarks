@@ -43,7 +43,8 @@ class HashSigImplementation(ABC):
         self.name = name
         self.repo_url = repo_url
         self.output_dir = output_dir
-        self.repo_dir = Path(name)
+        # Make repo_dir absolute from current working directory
+        self.repo_dir = Path.cwd() / name
         
     @abstractmethod
     def clone(self) -> bool:
@@ -78,6 +79,8 @@ class HashSigImplementationRust(HashSigImplementation):
         )
         # hash-sig only supports lifetimes 2^18 and 2^20
         self.supported_lifetimes = {18, 20}
+        # Path to our custom benchmark wrapper
+        self.wrapper_dir = Path.cwd() / 'rust_benchmark'
     
     def clone(self) -> bool:
         """Clone hash-sig repository"""
@@ -103,92 +106,78 @@ class HashSigImplementationRust(HashSigImplementation):
             return False
     
     def build(self) -> bool:
-        """Build hash-sig benchmarks using cargo"""
+        """Build hash-sig wrapper binary using cargo"""
         try:
-            print(f"  Building {self.name} with cargo (this may take a while)...")
-            # Build the benchmarks (not just the library)
+            print(f"  Building {self.name} wrapper with cargo...")
+            # Build our custom wrapper that uses the hash-sig library
             result = subprocess.run(
-                ['cargo', 'bench', '--no-run'],
-                cwd=str(self.repo_dir),
+                ['cargo', 'build', '--release'],
+                cwd=str(self.wrapper_dir),
                 capture_output=True,
                 text=True
             )
             
             if result.returncode != 0:
-                print(f"  Benchmark build failed: {result.stderr[:500]}")
+                print(f"  Build failed: {result.stderr[:500]}")
                 return False
             
-            print(f"  Benchmark build successful")
+            # Verify binary exists
+            binary = self.wrapper_dir / 'target' / 'release' / 'keygen_bench'
+            if not binary.exists():
+                print(f"  Binary not found after build")
+                return False
+            
+            print(f"  Build successful")
             return True
         except Exception as e:
             print(f"  Error building {self.name}: {e}")
             return False
     
     def generate_key(self, iteration: int, config: BenchmarkConfig) -> KeyGenResult:
-        """Generate key using hash-sig's criterion benchmarks"""
+        """Generate key using our custom Rust wrapper"""
         
-        # Check if lifetime is supported
-        if config.height not in self.supported_lifetimes:
+        # Only support lifetime 2^18 for now (wrapper is hardcoded to this)
+        if config.height != 18:
             return KeyGenResult(0, 0, 0, False, 
-                              f"Unsupported lifetime 2^{config.height}. Only 2^18 and 2^20 supported.")
+                              f"Wrapper only supports lifetime 2^18. Got 2^{config.height}.")
         
         try:
-            # Run criterion bench with specific filter
-            # Format: "Poseidon/Lifetime 18/Winternitz/w 8/Key Generation"
-            bench_filter = f"Lifetime {config.height}/Winternitz/w 8/Key Generation"
+            # Run our custom wrapper binary
+            binary = self.wrapper_dir / 'target' / 'release' / 'keygen_bench'
             
-            print(f"      Running criterion benchmark (this takes ~60s per run)...", end='', flush=True)
+            if not binary.exists():
+                return KeyGenResult(0, 0, 0, False, "Wrapper binary not found. Build may have failed.")
             
+            print(f"", end='', flush=True)
+            
+            start_time = time.perf_counter()
             result = subprocess.run(
-                ['cargo', 'bench', '--', bench_filter, '--warm-up-time', '1', '--measurement-time', '5'],
-                cwd=str(self.repo_dir),
+                [str(binary)],
                 capture_output=True,
                 text=True,
                 timeout=config.timeout
             )
+            end_time = time.perf_counter()
             
             if result.returncode != 0:
-                # Try without filter
-                result = subprocess.run(
-                    ['cargo', 'bench', '--bench', 'benchmark'],
-                    cwd=str(self.repo_dir),
-                    capture_output=True,
-                    text=True,
-                    timeout=config.timeout
-                )
-                
-                if result.returncode != 0:
-                    return KeyGenResult(0, 0, 0, False, 
-                                      f"Benchmark failed: {result.stderr[:300]}")
+                return KeyGenResult(0, 0, 0, False, 
+                                  f"Binary failed: {result.stderr[:300]}")
             
-            # Parse criterion output for timing
-            # Format: "time:   [42.532 s 42.890 s 43.267 s]"
-            for line in result.stdout.split('\n') + result.stderr.split('\n'):
-                if 'time:' in line.lower() and '[' in line and 's' in line:
+            # Parse output for benchmark result
+            # Format: "BENCHMARK_RESULT: 233.329641"
+            for line in result.stdout.split('\n'):
+                if "BENCHMARK_RESULT:" in line:
                     try:
-                        # Extract the middle value from [lower mean upper]
-                        parts = line.split('[')[1].split(']')[0].split()
-                        if len(parts) >= 5:  # [42.532 s 42.890 s 43.267 s]
-                            mean_val = float(parts[2])  # Middle value
-                            unit = parts[3]  # 's', 'ms', etc.
-                            
-                            # Convert to seconds
-                            if unit == 's':
-                                elapsed = mean_val
-                            elif unit == 'ms':
-                                elapsed = mean_val / 1000.0
-                            elif unit == 'µs' or unit == 'us':
-                                elapsed = mean_val / 1_000_000.0
-                            else:
-                                elapsed = mean_val  # Assume seconds
-                            
-                            return KeyGenResult(elapsed, 0, 0, True)
+                        time_str = line.split("BENCHMARK_RESULT:")[-1].strip()
+                        elapsed = float(time_str)
+                        return KeyGenResult(elapsed, 0, 0, True)
                     except (ValueError, IndexError) as e:
+                        print(f" ✗ Parse error: {e}")
                         continue
             
-            # Couldn't parse timing
-            return KeyGenResult(0, 0, 0, False, 
-                              "Could not parse benchmark output")
+            # Fallback: couldn't parse, use wall clock
+            elapsed = end_time - start_time
+            return KeyGenResult(elapsed, 0, 0, True, "Used wall clock time")
             
         except subprocess.TimeoutExpired:
             return KeyGenResult(0, 0, 0, False, f"Timeout after {config.timeout}s")
@@ -205,6 +194,8 @@ class HashZigImplementation(HashSigImplementation):
             'https://github.com/ch4r10t33r/hash-zig.git',
             output_dir / 'hash-zig'
         )
+        # Path to our custom benchmark wrapper
+        self.wrapper_dir = Path.cwd() / 'zig_benchmark'
     
     def clone(self) -> bool:
         """Clone hash-zig repository"""
@@ -230,18 +221,25 @@ class HashZigImplementation(HashSigImplementation):
             return False
     
     def build(self) -> bool:
-        """Build hash-zig using zig build"""
+        """Build hash-zig wrapper using zig build"""
         try:
-            print(f"  Building {self.name} with zig...")
+            print(f"  Building {self.name} wrapper with zig...")
+            # Build our custom wrapper that uses the hash-zig library
             result = subprocess.run(
                 ['zig', 'build', '-Doptimize=ReleaseFast'],
-                cwd=str(self.repo_dir),
+                cwd=str(self.wrapper_dir),
                 capture_output=True,
                 text=True
             )
             
             if result.returncode != 0:
-                print(f"  Build failed: {result.stderr}")
+                print(f"  Build failed: {result.stderr[:500]}")
+                return False
+            
+            # Verify binary exists
+            binary = self.wrapper_dir / 'zig-out' / 'bin' / 'keygen_bench'
+            if not binary.exists():
+                print(f"  Binary not found after build")
                 return False
             
             print(f"  Build successful")
@@ -251,16 +249,20 @@ class HashZigImplementation(HashSigImplementation):
             return False
     
     def generate_key(self, iteration: int, config: BenchmarkConfig) -> KeyGenResult:
-        """Generate key using hash-zig example"""
+        """Generate key using our custom Zig wrapper"""
         
         try:
-            # hash-zig prints timing in its example output
-            # We run the example and parse the timing
+            # Run our custom wrapper binary
+            binary = self.wrapper_dir / 'zig-out' / 'bin' / 'keygen_bench'
+            
+            if not binary.exists():
+                return KeyGenResult(0, 0, 0, False, "Wrapper binary not found. Build may have failed.")
+            
+            print(f"", end='', flush=True)
             
             start_time = time.perf_counter()
             result = subprocess.run(
-                ['zig', 'build', 'run', '-Doptimize=ReleaseFast'],
-                cwd=str(self.repo_dir),
+                [str(binary)],
                 capture_output=True,
                 text=True,
                 timeout=config.timeout
@@ -269,48 +271,26 @@ class HashZigImplementation(HashSigImplementation):
             
             if result.returncode != 0:
                 return KeyGenResult(0, 0, 0, False, 
-                                  f"Build/run failed: {result.stderr[:200]}")
+                                  f"Binary failed: {result.stderr[:300]}")
             
-            # Parse output for key generation timing
-            # Format: "Key generation completed in 40282.19 ms"
+            # Parse output for benchmark result
+            # Format: "BENCHMARK_RESULT: 10496.123456"
             for line in result.stdout.split('\n'):
-                if "Key generation completed in" in line and "ms" in line:
+                if "BENCHMARK_RESULT:" in line:
                     try:
-                        time_part = line.split("in")[-1].split("ms")[0].strip()
-                        elapsed_ms = float(time_part)
-                        elapsed_sec = elapsed_ms / 1000.0
-                        
-                        # Also get key sizes from output
-                        pub_size = 0
-                        priv_size = 0
-                        
-                        lines = result.stdout.split('\n')
-                        for i, l in enumerate(lines):
-                            if "Public Key:" in l and i + 1 < len(lines):
-                                next_line = lines[i + 1]
-                                if "Length:" in next_line and "bytes" in next_line:
-                                    try:
-                                        pub_size = int(next_line.split("Length:")[-1].split("bytes")[0].strip())
-                                    except:
-                                        pass
-                            if "Secret Key:" in l and i + 1 < len(lines):
-                                next_line = lines[i + 1]
-                                if "Length:" in next_line and "bytes" in next_line:
-                                    try:
-                                        priv_size = int(next_line.split("Length:")[-1].split("bytes")[0].strip())
-                                    except:
-                                        pass
-                        
-                        return KeyGenResult(elapsed_sec, priv_size, pub_size, True)
+                        time_str = line.split("BENCHMARK_RESULT:")[-1].strip()
+                        elapsed = float(time_str)
+                        return KeyGenResult(elapsed, 0, 0, True)
                     except (ValueError, IndexError) as e:
-                        pass
+                        print(f" ✗ Parse error: {e}")
+                        continue
             
             # Fallback: use wall clock time
             elapsed = end_time - start_time
             return KeyGenResult(elapsed, 0, 0, True, "Used wall clock time")
             
         except subprocess.TimeoutExpired:
-            return KeyGenResult(0, 0, 0, False, "Timeout")
+            return KeyGenResult(0, 0, 0, False, f"Timeout after {config.timeout}s")
         except Exception as e:
             return KeyGenResult(0, 0, 0, False, str(e)[:200])
 

@@ -1,0 +1,13 @@
+[package]
+name = "rust_benchmark"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hashsig = { path = "../hash-sig" }
+rand = "0.9"
+
+[[bin]]
+name = "keygen_bench"
+path = "src/main.rs"
+
