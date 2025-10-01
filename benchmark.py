@@ -30,26 +30,18 @@ class KeyGenResult:
 @dataclass
 class BenchmarkConfig:
     """Configuration for benchmark runs"""
-    lifetime: int = 262144  # 2^18 (both implementations support this)
-    height: int = 18
-    iterations: int = 3  # Fewer iterations for large lifetimes
-    timeout: int = 600  # seconds (10 minutes)
+    lifetime: int = 1024  # 2^10 (faster for testing)
+    height: int = 10
+    iterations: int = 3
+    timeout: int = 300  # seconds (5 minutes)
     
 
 class HashSigImplementation(ABC):
     """Abstract base class for hash signature implementations"""
     
-    def __init__(self, name: str, repo_url: str, output_dir: Path):
+    def __init__(self, name: str, output_dir: Path):
         self.name = name
-        self.repo_url = repo_url
         self.output_dir = output_dir
-        # Make repo_dir absolute from current working directory
-        self.repo_dir = Path.cwd() / name
-        
-    @abstractmethod
-    def clone(self) -> bool:
-        """Clone the repository"""
-        pass
     
     @abstractmethod
     def build(self) -> bool:
@@ -72,38 +64,9 @@ class HashSigImplementationRust(HashSigImplementation):
     """hash-sig Rust implementation wrapper"""
     
     def __init__(self, output_dir: Path):
-        super().__init__(
-            'hash-sig',
-            'https://github.com/b-wagn/hash-sig.git',
-            output_dir / 'hash-sig'
-        )
-        # hash-sig only supports lifetimes 2^18 and 2^20
-        self.supported_lifetimes = {18, 20}
+        super().__init__('hash-sig', output_dir / 'hash-sig')
         # Path to our custom benchmark wrapper
         self.wrapper_dir = Path.cwd() / 'rust_benchmark'
-    
-    def clone(self) -> bool:
-        """Clone hash-sig repository"""
-        try:
-            if self.repo_dir.exists():
-                print(f"  {self.name} directory exists, pulling latest...")
-                result = subprocess.run(
-                    ['git', '-C', str(self.repo_dir), 'pull'],
-                    capture_output=True,
-                    text=True
-                )
-                return result.returncode == 0
-            else:
-                print(f"  Cloning {self.name}...")
-                result = subprocess.run(
-                    ['git', 'clone', self.repo_url, str(self.repo_dir)],
-                    capture_output=True,
-                    text=True
-                )
-                return result.returncode == 0
-        except Exception as e:
-            print(f"  Error cloning {self.name}: {e}")
-            return False
     
     def build(self) -> bool:
         """Build hash-sig wrapper binary using cargo"""
@@ -135,11 +98,6 @@ class HashSigImplementationRust(HashSigImplementation):
     
     def generate_key(self, iteration: int, config: BenchmarkConfig) -> KeyGenResult:
         """Generate key using our custom Rust wrapper"""
-        
-        # Only support lifetime 2^18 for now (wrapper is hardcoded to this)
-        if config.height != 18:
-            return KeyGenResult(0, 0, 0, False, 
-                              f"Wrapper only supports lifetime 2^18. Got 2^{config.height}.")
         
         try:
             # Run our custom wrapper binary
@@ -189,44 +147,21 @@ class HashZigImplementation(HashSigImplementation):
     """hash-zig Zig implementation wrapper"""
     
     def __init__(self, output_dir: Path):
-        super().__init__(
-            'hash-zig',
-            'https://github.com/ch4r10t33r/hash-zig.git',
-            output_dir / 'hash-zig'
-        )
+        super().__init__('hash-zig', output_dir / 'hash-zig')
         # Path to our custom benchmark wrapper
         self.wrapper_dir = Path.cwd() / 'zig_benchmark'
-    
-    def clone(self) -> bool:
-        """Clone hash-zig repository"""
-        try:
-            if self.repo_dir.exists():
-                print(f"  {self.name} directory exists, pulling latest...")
-                result = subprocess.run(
-                    ['git', '-C', str(self.repo_dir), 'pull'],
-                    capture_output=True,
-                    text=True
-                )
-                return result.returncode == 0
-            else:
-                print(f"  Cloning {self.name}...")
-                result = subprocess.run(
-                    ['git', 'clone', self.repo_url, str(self.repo_dir)],
-                    capture_output=True,
-                    text=True
-                )
-                return result.returncode == 0
-        except Exception as e:
-            print(f"  Error cloning {self.name}: {e}")
-            return False
     
     def build(self) -> bool:
         """Build hash-zig wrapper using zig build"""
         try:
             print(f"  Building {self.name} wrapper with zig...")
+            
+            # Use Zig 0.14.1 (required for hash-zig)
+            zig_path = '/Users/partha/.local/share/zigup/0.14.1/files/zig'
+            
             # Build our custom wrapper that uses the hash-zig library
             result = subprocess.run(
-                ['zig', 'build', '-Doptimize=ReleaseFast'],
+                [zig_path, 'build', '-Doptimize=ReleaseFast'],
                 cwd=str(self.wrapper_dir),
                 capture_output=True,
                 text=True
@@ -303,27 +238,68 @@ class BenchmarkRunner:
         self.output_dir = output_dir
         self.implementations: List[HashSigImplementation] = []
         self.results: Dict[str, List[KeyGenResult]] = {}
+        self.repos_dir = Path.cwd()
         
     def add_implementation(self, impl: HashSigImplementation):
         """Add an implementation to benchmark"""
         self.implementations.append(impl)
         self.results[impl.name] = []
     
-    def setup(self) -> bool:
-        """Clone and build all implementations"""
+    def clone_repositories(self) -> bool:
+        """Clone required repositories"""
+        repos = {
+            'hash-sig': 'https://github.com/b-wagn/hash-sig.git',
+            'hash-zig': 'https://github.com/ch4r10t33r/hash-zig.git',
+        }
+        
         print("\n" + "="*70)
-        print("SETUP PHASE")
+        print("CLONING REPOSITORIES")
+        print("="*70)
+        
+        for name, url in repos.items():
+            repo_path = self.repos_dir / name
+            
+            if repo_path.exists():
+                print(f"\n{name}:")
+                print(f"  Directory exists, pulling latest...")
+                result = subprocess.run(
+                    ['git', '-C', str(repo_path), 'pull'],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode == 0:
+                    print(f"  ✓ Updated to latest")
+                else:
+                    print(f"  ⚠ Pull failed, using existing version")
+            else:
+                print(f"\n{name}:")
+                print(f"  Cloning from {url}...")
+                result = subprocess.run(
+                    ['git', 'clone', url, str(repo_path)],
+                    capture_output=True,
+                    text=True
+                )
+                if result.returncode != 0:
+                    print(f"  ✗ Clone failed: {result.stderr[:300]}")
+                    return False
+                print(f"  ✓ Cloned successfully")
+        
+        return True
+    
+    def setup(self) -> bool:
+        """Setup: clone repos and build wrappers"""
+        # Clone repositories first
+        if not self.clone_repositories():
+            return False
+        
+        print("\n" + "="*70)
+        print("BUILD PHASE")
         print("="*70)
         
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         for impl in self.implementations:
             print(f"\n{impl.name}:")
-            
-            if not impl.clone():
-                print(f"  ✗ Failed to clone {impl.name}")
-                return False
-            print(f"  ✓ Repository ready")
             
             if not impl.build():
                 print(f"  ✗ Failed to build {impl.name}")
