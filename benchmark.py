@@ -30,10 +30,10 @@ class KeyGenResult:
 @dataclass
 class BenchmarkConfig:
     """Configuration for benchmark runs"""
-    lifetime: int = 1024  # 2^10 (faster for testing)
-    height: int = 10
+    lifetime: int = 65536  # 2^16 (65,536 signatures)
+    height: int = 16
     iterations: int = 3
-    timeout: int = 300  # seconds (5 minutes)
+    timeout: int = 1800  # seconds (30 minutes for larger tree)
     
 
 class HashSigImplementation(ABC):
@@ -246,14 +246,14 @@ class BenchmarkRunner:
         self.results[impl.name] = []
     
     def clone_repositories(self) -> bool:
-        """Clone required repositories"""
+        """Clone or update required repositories to latest code"""
         repos = {
             'hash-sig': 'https://github.com/b-wagn/hash-sig.git',
             'hash-zig': 'https://github.com/ch4r10t33r/hash-zig.git',
         }
         
         print("\n" + "="*70)
-        print("CLONING REPOSITORIES")
+        print("UPDATING REPOSITORIES TO LATEST")
         print("="*70)
         
         for name, url in repos.items():
@@ -261,21 +261,54 @@ class BenchmarkRunner:
             
             if repo_path.exists():
                 print(f"\n{name}:")
-                print(f"  Directory exists, pulling latest...")
-                result = subprocess.run(
-                    ['git', '-C', str(repo_path), 'pull'],
+                print(f"  Repository exists, ensuring we have latest code...")
+                
+                # First, fetch all remote changes
+                fetch_result = subprocess.run(
+                    ['git', '-C', str(repo_path), 'fetch', '--all'],
                     capture_output=True,
                     text=True
                 )
-                if result.returncode == 0:
-                    print(f"  ✓ Updated to latest")
+                
+                if fetch_result.returncode != 0:
+                    print(f"  ⚠ Fetch failed: {fetch_result.stderr[:200]}")
+                    print(f"  Removing and re-cloning...")
+                    if repo_path.is_symlink():
+                        repo_path.unlink()
+                    else:
+                        shutil.rmtree(repo_path)
                 else:
-                    print(f"  ⚠ Pull failed, using existing version")
-            else:
+                    # Reset to latest origin/main to ensure clean state
+                    reset_result = subprocess.run(
+                        ['git', '-C', str(repo_path), 'reset', '--hard', 'origin/main'],
+                        capture_output=True,
+                        text=True
+                    )
+                    
+                    if reset_result.returncode == 0:
+                        print(f"  ✓ Reset to latest origin/main")
+                    else:
+                        # If reset fails, try pull as fallback
+                        pull_result = subprocess.run(
+                            ['git', '-C', str(repo_path), 'pull', 'origin', 'main'],
+                            capture_output=True,
+                            text=True
+                        )
+                        if pull_result.returncode == 0:
+                            print(f"  ✓ Updated to latest")
+                        else:
+                            print(f"  ⚠ Pull failed, removing and re-cloning: {pull_result.stderr[:200]}")
+                            if repo_path.is_symlink():
+                                repo_path.unlink()
+                            else:
+                                shutil.rmtree(repo_path)
+            
+            # If directory doesn't exist or was removed, clone fresh
+            if not repo_path.exists():
                 print(f"\n{name}:")
-                print(f"  Cloning from {url}...")
+                print(f"  Cloning fresh from {url}...")
                 result = subprocess.run(
-                    ['git', 'clone', url, str(repo_path)],
+                    ['git', 'clone', '--depth', '1', url, str(repo_path)],
                     capture_output=True,
                     text=True
                 )

@@ -8,13 +8,13 @@ pub fn main() !void {
 
     std.debug.print("Zig hash-zig Key Generation Benchmark\n", .{});
     std.debug.print("======================================\n", .{});
-    std.debug.print("Lifetime: 2^10 = 1,024 signatures\n", .{});
+    std.debug.print("Lifetime: 2^16 = 65,536 signatures\n", .{});
     std.debug.print("Parameters: 64 chains of length 8 (w=8)\n", .{});
     std.debug.print("Hash: Poseidon2\n", .{});
     std.debug.print("\n", .{});
 
-    // Initialize with lifetime_2_10 (same as Rust for fair comparison)
-    const params = hash_sig.Parameters.init(.lifetime_2_10);
+    // Initialize with lifetime_2_16
+    const params = hash_sig.Parameters.init(.lifetime_2_16);
     var sig_scheme = try hash_sig.HashSignature.init(allocator, params);
     defer sig_scheme.deinit();
 
