@@ -249,12 +249,29 @@ class BenchmarkRunner:
         """Clone or update required repositories to latest code"""
         repos = {
             'hash-sig': 'https://github.com/b-wagn/hash-sig.git',
-            'hash-zig': 'https://github.com/ch4r10t33r/hash-zig.git',
+            # Use local optimized hash-zig for benchmarking
+            # 'hash-zig': 'https://github.com/ch4r10t33r/hash-zig.git',
         }
         
         print("\n" + "="*70)
         print("UPDATING REPOSITORIES TO LATEST")
         print("="*70)
+        
+        # Special handling for hash-zig - use local optimized version
+        hash_zig_local = Path('/Users/partha/zig/hash-zig')
+        hash_zig_target = self.repos_dir / 'hash-zig'
+        if hash_zig_target.exists() and hash_zig_target.is_symlink():
+            hash_zig_target.unlink()
+        if hash_zig_target.exists() and not hash_zig_target.is_symlink():
+            import shutil
+            shutil.rmtree(hash_zig_target)
+        
+        # Create symlink to local optimized hash-zig
+        if not hash_zig_target.exists():
+            print(f"\nhash-zig:")
+            print(f"  Using local optimized version from {hash_zig_local}")
+            hash_zig_target.symlink_to(hash_zig_local)
+            print(f"  ✓ Linked successfully")
         
         for name, url in repos.items():
             repo_path = self.repos_dir / name
