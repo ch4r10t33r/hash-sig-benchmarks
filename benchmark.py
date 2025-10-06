@@ -166,17 +166,17 @@ class HashSigImplementationRust(HashSigImplementation):
 
 
 class HashZigImplementation(HashSigImplementation):
-    """hash-zig SIMD implementation wrapper"""
+    """hash-zig standard (Rust-compatible) implementation wrapper"""
     
     def __init__(self, output_dir: Path):
-        super().__init__('hash-zig-simd', output_dir / 'hash-zig-simd')
+        super().__init__('hash-zig', output_dir / 'hash-zig')
         # Path to the standalone zig benchmark project
         self.zig_proj_dir = Path.cwd() / 'zig_benchmark'
     
     def build(self) -> bool:
         """Build standalone zig benchmark using zig build"""
         try:
-            print(f"  Building {self.name} standalone benchmark with zig...")
+            print(f"  Building {self.name} (Standard Rust-compatible) with zig...")
 
             result = subprocess.run(
                 ['zig', 'build', '-Doptimize=ReleaseFast'],
@@ -279,10 +279,12 @@ class BenchmarkRunner:
         self.results[impl.name] = []
     
     def clone_repositories(self) -> bool:
-        """No-op: dependencies are managed by Cargo and Zig package URLs"""
+        """Skip git clone - using local wrappers only"""
         print("\n" + "="*70)
-        print("SKIPPING GIT CLONE/UPDATE (managed by Cargo and Zig fetch)")
+        print("Using local benchmark wrappers (no git clone needed)")
         print("="*70)
+        print("  Rust: rust_benchmark/")
+        print("  Zig:  zig_benchmark/")
         return True
     
     def setup(self) -> bool:
@@ -406,7 +408,7 @@ class BenchmarkRunner:
 
             # Key comparison if both provided keys
             rust_results = self.results.get('hash-sig', [])
-            zig_results = self.results.get('hash-zig-simd', [])
+            zig_results = self.results.get('hash-zig', [])
             if rust_results and zig_results:
                 # Find first successful entries with keys
                 rust_first = next((r for r in rust_results if r.success and r.secret_hex and r.public_hex), None)
@@ -485,7 +487,8 @@ def main():
     """Main entry point"""
     print("Hash-Based Signature Benchmark Suite")
     print("="*70)
-    print("Comparing hash-sig (Rust) vs hash-zig-simd (Zig SIMD)")
+    print("Comparing hash-sig (Rust) vs hash-zig (Zig Standard)")
+    print("Both use Generalized XMSS architecture")
     print()
     
     if not check_dependencies():
