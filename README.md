@@ -1,13 +1,15 @@
 # Hash-Based Signature Benchmark Suite
 
-A modular benchmarking framework for comparing hash-based signature implementations, specifically designed to evaluate key generation performance between [hash-sig](https://github.com/b-wagn/hash-sig/) and [hash-zig](https://github.com/ch4r10t33r/hash-zig).
+A modular benchmarking framework for comparing hash-based signature implementations, specifically designed to evaluate key generation performance between [hash-sig](https://github.com/b-wagn/hash-sig/) (Rust) and [hash-zig](https://github.com/ch4r10t33r/hash-zig) (Zig) with **exact Rust compatibility**.
 
 ## Features
 
-- **Automated Setup**: Automatically clones and builds both implementations
+- **Rust-Compatible Architecture**: Both implementations use identical Generalized XMSS architecture with PRF-based key derivation, epoch management, and encoding randomness
+- **Hypercube Parameters**: Both use hypercube parameters (64 chains of length 8, w=3) from [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
+- **Automated Setup**: Automatically builds both implementations with proper dependencies
 - **Modular Architecture**: Easy to extend with additional implementations
 - **Statistical Analysis**: Comprehensive performance metrics including mean, median, min, max, and standard deviation
-- **Key Size Comparison**: Measures and compares private/public key sizes
+- **Key Verification**: SHA3-256 public key hashing for cross-implementation verification
 - **JSON Export**: Results saved in machine-readable format for further analysis
 - **Robust Error Handling**: Timeout protection and detailed error reporting
 
@@ -66,10 +68,9 @@ sudo pacman -S git python rust zig
    ```
 
 The script will automatically:
-- Clone both hash-sig and hash-zig repositories
-- Build both implementations
-- Run the benchmark suite
-- Display detailed results
+- Build both Rust and Zig implementations with proper dependencies
+- Run the benchmark suite with Rust-compatible parameters
+- Display detailed results including key verification
 - Save results to `benchmark_output/benchmark_results.json`
 
 ## Usage

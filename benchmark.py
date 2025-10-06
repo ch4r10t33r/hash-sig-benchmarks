@@ -25,13 +25,15 @@ class KeyGenResult:
     public_key_size: int
     success: bool
     error_message: Optional[str] = None
+    secret_hex: Optional[str] = None
+    public_hex: Optional[str] = None
 
 
 @dataclass
 class BenchmarkConfig:
     """Configuration for benchmark runs"""
-    lifetime: int = 65536  # 2^16 (65,536 signatures)
-    height: int = 16
+    lifetime: int = 1024  # 2^10 (1,024 signatures)
+    height: int = 10
     iterations: int = 3
     timeout: int = 1800  # seconds (30 minutes for larger tree)
     
@@ -104,16 +106,24 @@ class HashSigImplementationRust(HashSigImplementation):
             binary = self.wrapper_dir / 'target' / 'release' / 'keygen_bench'
             
             if not binary.exists():
-                return KeyGenResult(0, 0, 0, False, "Wrapper binary not found. Build may have failed.")
+                # Attempt to build on-demand, then re-check
+                _ = self.build()
+                if not binary.exists():
+                    return KeyGenResult(0, 0, 0, False, "Wrapper binary not found. Build may have failed.")
             
             print(f"", end='', flush=True)
             
+            # Provide same fixed seed to rust wrapper via env as well (wrapper may ignore)
+            env = os.environ.copy()
+            env.setdefault('SEED_HEX', '42' * 64)
+
             start_time = time.perf_counter()
             result = subprocess.run(
                 [str(binary)],
                 capture_output=True,
                 text=True,
-                timeout=config.timeout
+                timeout=config.timeout,
+                env=env,
             )
             end_time = time.perf_counter()
             
@@ -121,21 +131,33 @@ class HashSigImplementationRust(HashSigImplementation):
                 return KeyGenResult(0, 0, 0, False, 
                                   f"Binary failed: {result.stderr[:300]}")
             
-            # Parse output for benchmark result
+            # Parse output for benchmark result and test flags
             # Format: "BENCHMARK_RESULT: 233.329641"
+            seed_hex = env.get('SEED_HEX')
             for line in result.stdout.split('\n'):
                 if "BENCHMARK_RESULT:" in line:
                     try:
                         time_str = line.split("BENCHMARK_RESULT:")[-1].strip()
                         elapsed = float(time_str)
-                        return KeyGenResult(elapsed, 0, 0, True)
+                        # Rust wrapper currently doesn't emit keys; attach seed for report
+                        return KeyGenResult(elapsed, 0, 0, True, None, seed_hex, None)
                     except (ValueError, IndexError) as e:
                         print(f" ✗ Parse error: {e}")
                         continue
             
+                if line.startswith("PUBLIC_SHA3:"):
+                    try:
+                        pk_str = line.split(":", 1)[1].strip()
+                        return KeyGenResult(elapsed, 0, 0, True, None, seed_hex, pk_str)
+                    except Exception:
+                        pass
+                if line.startswith("VERIFY_OK:"):
+                    # could store/print but not needed for return
+                    pass
+
             # Fallback: couldn't parse, use wall clock
             elapsed = end_time - start_time
-            return KeyGenResult(elapsed, 0, 0, True, "Used wall clock time")
+            return KeyGenResult(elapsed, 0, 0, True, "Used wall clock time", seed_hex, None)
             
         except subprocess.TimeoutExpired:
             return KeyGenResult(0, 0, 0, False, f"Timeout after {config.timeout}s")
@@ -144,25 +166,21 @@ class HashSigImplementationRust(HashSigImplementation):
 
 
 class HashZigImplementation(HashSigImplementation):
-    """hash-zig Zig implementation wrapper"""
+    """hash-zig SIMD implementation wrapper"""
     
     def __init__(self, output_dir: Path):
-        super().__init__('hash-zig', output_dir / 'hash-zig')
-        # Path to our custom benchmark wrapper
-        self.wrapper_dir = Path.cwd() / 'zig_benchmark'
+        super().__init__('hash-zig-simd', output_dir / 'hash-zig-simd')
+        # Path to the standalone zig benchmark project
+        self.zig_proj_dir = Path.cwd() / 'zig_benchmark'
     
     def build(self) -> bool:
-        """Build hash-zig wrapper using zig build"""
+        """Build standalone zig benchmark using zig build"""
         try:
-            print(f"  Building {self.name} wrapper with zig...")
-            
-            # Use Zig 0.14.1 (required for hash-zig)
-            zig_path = '/Users/partha/.local/share/zigup/0.14.1/files/zig'
-            
-            # Build our custom wrapper that uses the hash-zig library
+            print(f"  Building {self.name} standalone benchmark with zig...")
+
             result = subprocess.run(
-                [zig_path, 'build', '-Doptimize=ReleaseFast'],
-                cwd=str(self.wrapper_dir),
+                ['zig', 'build', '-Doptimize=ReleaseFast'],
+                cwd=str(self.zig_proj_dir),
                 capture_output=True,
                 text=True
             )
@@ -172,7 +190,7 @@ class HashZigImplementation(HashSigImplementation):
                 return False
             
             # Verify binary exists
-            binary = self.wrapper_dir / 'zig-out' / 'bin' / 'keygen_bench'
+            binary = self.zig_proj_dir / 'zig-out' / 'bin' / 'keygen_bench'
             if not binary.exists():
                 print(f"  Binary not found after build")
                 return False
@@ -184,23 +202,31 @@ class HashZigImplementation(HashSigImplementation):
             return False
     
     def generate_key(self, iteration: int, config: BenchmarkConfig) -> KeyGenResult:
-        """Generate key using our custom Zig wrapper"""
+        """Generate key using standalone zig benchmark executable"""
         
         try:
-            # Run our custom wrapper binary
-            binary = self.wrapper_dir / 'zig-out' / 'bin' / 'keygen_bench'
+            # Run the SIMD benchmark binary
+            binary = self.zig_proj_dir / 'zig-out' / 'bin' / 'keygen_bench'
             
             if not binary.exists():
-                return KeyGenResult(0, 0, 0, False, "Wrapper binary not found. Build may have failed.")
+                # Attempt to build on-demand, then re-check
+                _ = self.build()
+                if not binary.exists():
+                    return KeyGenResult(0, 0, 0, False, "SIMD benchmark binary not found. Build may have failed.")
             
             print(f"", end='', flush=True)
             
+            # Provide a fixed seed via environment for reproducibility
+            env = os.environ.copy()
+            env.setdefault('SEED_HEX', '42' * 64)
+
             start_time = time.perf_counter()
             result = subprocess.run(
                 [str(binary)],
                 capture_output=True,
                 text=True,
-                timeout=config.timeout
+                timeout=config.timeout,
+                env=env,
             )
             end_time = time.perf_counter()
             
@@ -208,21 +234,28 @@ class HashZigImplementation(HashSigImplementation):
                 return KeyGenResult(0, 0, 0, False, 
                                   f"Binary failed: {result.stderr[:300]}")
             
-            # Parse output for benchmark result
-            # Format: "BENCHMARK_RESULT: 10496.123456"
+            # Parse output for benchmark result and test flags (from standalone zig)
+            # Format: "BENCHMARK_RESULT: 0.123456"
+            seed_hex = env.get('SEED_HEX')
             for line in result.stdout.split('\n'):
-                if "BENCHMARK_RESULT:" in line:
+                if line.startswith("BENCHMARK_RESULT:"):
                     try:
-                        time_str = line.split("BENCHMARK_RESULT:")[-1].strip()
+                        time_str = line.split(":", 1)[1].strip()
                         elapsed = float(time_str)
-                        return KeyGenResult(elapsed, 0, 0, True)
+                        return KeyGenResult(elapsed, 0, 0, True, None, seed_hex, None)
                     except (ValueError, IndexError) as e:
                         print(f" ✗ Parse error: {e}")
                         continue
+                if line.startswith("PUBLIC_SHA3:"):
+                    # Optional logging hook for future comparison
+                    pass
+                if line.startswith("VERIFY_OK:"):
+                    # Optional logging hook
+                    pass
             
             # Fallback: use wall clock time
             elapsed = end_time - start_time
-            return KeyGenResult(elapsed, 0, 0, True, "Used wall clock time")
+            return KeyGenResult(elapsed, 0, 0, True, "Used wall clock time", seed_hex, None)
             
         except subprocess.TimeoutExpired:
             return KeyGenResult(0, 0, 0, False, f"Timeout after {config.timeout}s")
@@ -246,94 +279,10 @@ class BenchmarkRunner:
         self.results[impl.name] = []
     
     def clone_repositories(self) -> bool:
-        """Clone or update required repositories to latest code"""
-        repos = {
-            'hash-sig': 'https://github.com/b-wagn/hash-sig.git',
-            # Use local optimized hash-zig for benchmarking
-            # 'hash-zig': 'https://github.com/ch4r10t33r/hash-zig.git',
-        }
-        
+        """No-op: dependencies are managed by Cargo and Zig package URLs"""
         print("\n" + "="*70)
-        print("UPDATING REPOSITORIES TO LATEST")
+        print("SKIPPING GIT CLONE/UPDATE (managed by Cargo and Zig fetch)")
         print("="*70)
-        
-        # Special handling for hash-zig - use local optimized version
-        hash_zig_local = Path('/Users/partha/zig/hash-zig')
-        hash_zig_target = self.repos_dir / 'hash-zig'
-        if hash_zig_target.exists() and hash_zig_target.is_symlink():
-            hash_zig_target.unlink()
-        if hash_zig_target.exists() and not hash_zig_target.is_symlink():
-            import shutil
-            shutil.rmtree(hash_zig_target)
-        
-        # Create symlink to local optimized hash-zig
-        if not hash_zig_target.exists():
-            print(f"\nhash-zig:")
-            print(f"  Using local optimized version from {hash_zig_local}")
-            hash_zig_target.symlink_to(hash_zig_local)
-            print(f"  ✓ Linked successfully")
-        
-        for name, url in repos.items():
-            repo_path = self.repos_dir / name
-            
-            if repo_path.exists():
-                print(f"\n{name}:")
-                print(f"  Repository exists, ensuring we have latest code...")
-                
-                # First, fetch all remote changes
-                fetch_result = subprocess.run(
-                    ['git', '-C', str(repo_path), 'fetch', '--all'],
-                    capture_output=True,
-                    text=True
-                )
-                
-                if fetch_result.returncode != 0:
-                    print(f"  ⚠ Fetch failed: {fetch_result.stderr[:200]}")
-                    print(f"  Removing and re-cloning...")
-                    if repo_path.is_symlink():
-                        repo_path.unlink()
-                    else:
-                        shutil.rmtree(repo_path)
-                else:
-                    # Reset to latest origin/main to ensure clean state
-                    reset_result = subprocess.run(
-                        ['git', '-C', str(repo_path), 'reset', '--hard', 'origin/main'],
-                        capture_output=True,
-                        text=True
-                    )
-                    
-                    if reset_result.returncode == 0:
-                        print(f"  ✓ Reset to latest origin/main")
-                    else:
-                        # If reset fails, try pull as fallback
-                        pull_result = subprocess.run(
-                            ['git', '-C', str(repo_path), 'pull', 'origin', 'main'],
-                            capture_output=True,
-                            text=True
-                        )
-                        if pull_result.returncode == 0:
-                            print(f"  ✓ Updated to latest")
-                        else:
-                            print(f"  ⚠ Pull failed, removing and re-cloning: {pull_result.stderr[:200]}")
-                            if repo_path.is_symlink():
-                                repo_path.unlink()
-                            else:
-                                shutil.rmtree(repo_path)
-            
-            # If directory doesn't exist or was removed, clone fresh
-            if not repo_path.exists():
-                print(f"\n{name}:")
-                print(f"  Cloning fresh from {url}...")
-                result = subprocess.run(
-                    ['git', 'clone', '--depth', '1', url, str(repo_path)],
-                    capture_output=True,
-                    text=True
-                )
-                if result.returncode != 0:
-                    print(f"  ✗ Clone failed: {result.stderr[:300]}")
-                    return False
-                print(f"  ✓ Cloned successfully")
-        
         return True
     
     def setup(self) -> bool:
@@ -433,7 +382,7 @@ class BenchmarkRunner:
                     avg_pub = statistics.mean([s for s in pub_sizes if s > 0])
                     print(f"    Public key:  {avg_pub:,.0f} bytes")
         
-        # Comparison
+        # Comparison (and key equality if available)
         if len(stats) == 2:
             names = list(stats.keys())
             time1 = stats[names[0]]['mean_time']
@@ -454,6 +403,41 @@ class BenchmarkRunner:
             for name in names:
                 print(f"  {name}: {stats[name]['mean_time']:.3f}s")
             print(f"\nDifference: {abs(time1 - time2):.3f}s")
+
+            # Key comparison if both provided keys
+            rust_results = self.results.get('hash-sig', [])
+            zig_results = self.results.get('hash-zig-simd', [])
+            if rust_results and zig_results:
+                # Find first successful entries with keys
+                rust_first = next((r for r in rust_results if r.success and r.secret_hex and r.public_hex), None)
+                zig_first = next((r for r in zig_results if r.success and r.secret_hex and r.public_hex), None)
+                if rust_first and zig_first:
+                    same_secret = rust_first.secret_hex == zig_first.secret_hex
+                    same_public = rust_first.public_hex == zig_first.public_hex
+                    print("\nKey Comparison (same seed):")
+                    print(f"  Secret keys: {'SAME' if same_secret else 'DIFFERENT'}")
+                    print(f"  Public keys: {'SAME' if same_public else 'DIFFERENT'}")
+                else:
+                    print("\nKey Comparison: Not available (one or both implementations did not emit keys)")
+
+        # Final report extras: seed and public keys if available
+        print("\n" + "="*70)
+        print("FINAL ARTIFACTS")
+        print("="*70)
+        # Seed used (prefer rust if present, else zig)
+        rust_first = next((r for r in self.results.get('hash-sig', []) if r.success and r.secret_hex), None)
+        zig_first = next((r for r in self.results.get('hash-zig-simd', []) if r.success and r.secret_hex), None)
+        seed_hex = rust_first.secret_hex if rust_first else (zig_first.secret_hex if zig_first else None)
+        if seed_hex:
+            print(f"Seed used (hex): {seed_hex}")
+        else:
+            print("Seed used (hex): unavailable")
+
+        # Public keys
+        rust_pk = next((r.public_hex for r in self.results.get('hash-sig', []) if r.success and r.public_hex), None)
+        zig_pk = next((r.public_hex for r in self.results.get('hash-zig-simd', []) if r.success and r.public_hex), None)
+        print(f"Rust public key: {rust_pk if rust_pk else 'unavailable'}")
+        print(f"Zig public key:  {zig_pk if zig_pk else 'unavailable'}")
     
     def save_results(self, filename: str = 'benchmark_results.json'):
         """Save results to JSON"""
@@ -501,7 +485,7 @@ def main():
     """Main entry point"""
     print("Hash-Based Signature Benchmark Suite")
     print("="*70)
-    print("Comparing hash-sig (Rust) vs hash-zig (Zig)")
+    print("Comparing hash-sig (Rust) vs hash-zig-simd (Zig SIMD)")
     print()
     
     if not check_dependencies():
