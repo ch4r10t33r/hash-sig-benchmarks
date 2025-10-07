@@ -10,12 +10,12 @@ pub fn main() !void {
     std.debug.print("===============================================\n", .{});
     std.debug.print("Lifetime: 2^10 = 1,024 signatures\n", .{});
     std.debug.print("Architecture: Rust-compatible (Generalized XMSS)\n", .{});
-    std.debug.print("Parameters: Hypercube (64 chains of length 8, w=3)\n", .{});
+    std.debug.print("Parameters: Winternitz (22 chains of length 256, w=8)\n", .{});
     std.debug.print("Hash: Poseidon2 (width=16, KoalaBear field)\n", .{});
     std.debug.print("\n", .{});
 
-    // Initialize parameters with hypercube configuration
-    const params = hash_zig.Parameters.initHypercube(.lifetime_2_10);
+    // Initialize parameters with recommended Winternitz configuration (matching Rust)
+    const params = hash_zig.Parameters.init(.lifetime_2_10);
 
     // Read SEED_HEX env var (64 hex chars => 32 bytes). Default to 0x42 repeated
     var seed: [32]u8 = undefined;
@@ -115,5 +115,5 @@ pub fn main() !void {
 
     std.debug.print("\n✅ Benchmark completed successfully!\n", .{});
     std.debug.print("Implementation: Standard Rust-compatible (HashSignature)\n", .{});
-    std.debug.print("Parameters: Hypercube (64 chains × 8 length, w=3)\n", .{});
+    std.debug.print("Parameters: Winternitz (22 chains × 256 length, w=8)\n", .{});
 }

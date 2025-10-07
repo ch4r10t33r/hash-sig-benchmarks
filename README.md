@@ -5,7 +5,7 @@ A modular benchmarking framework for comparing hash-based signature implementati
 ## Features
 
 - **Rust-Compatible Architecture**: Both implementations use identical Generalized XMSS architecture with PRF-based key derivation, epoch management, and encoding randomness
-- **Hypercube Parameters**: Both use hypercube parameters (64 chains of length 8, w=3) from [hypercube-hashsig-parameters](https://github.com/b-wagn/hypercube-hashsig-parameters)
+- **Recommended Parameters**: Both use Winternitz parameters (22 chains of length 256, w=8) from [hash-sig](https://github.com/b-wagn/hash-sig/) recommended configuration
 - **Automated Setup**: Automatically builds both implementations with proper dependencies
 - **Modular Architecture**: Easy to extend with additional implementations
 - **Statistical Analysis**: Comprehensive performance metrics including mean, median, min, max, and standard deviation
@@ -156,12 +156,20 @@ runner.add_implementation(MyNewImplementation(output_dir))
 
 ## Benchmark Parameters
 
-The benchmark is configured for:
-- **Lifetime**: 2^10 = 1024 signatures
-- **Tree Height**: 10
-- **hash-sig (Rust)**: Uses Poseidon2 or SHA3 (generalized XMSS framework)
-- **hash-zig (Zig)**: Uses Poseidon2 or SHA3 with binary encoding
-- **Both implementations**: 128-bit post-quantum security
+The benchmark is configured for **exact parameter matching**:
+
+| Parameter | Value | Source |
+|-----------|-------|--------|
+| **Lifetime** | 2^10 = 1,024 signatures | Standard test configuration |
+| **Tree Height** | 10 | Derived from lifetime |
+| **Winternitz w** | 8 | Recommended by hash-sig |
+| **Number of Chains** | 22 | Recommended by hash-sig |
+| **Chain Length** | 256 (2^8) | Derived from w=8 |
+| **Hash Function** | Poseidon2 | Width=16, KoalaBear field |
+| **Encoding** | Binary | Incomparable encoding with randomness |
+| **Security Level** | 128-bit | Post-quantum secure |
+
+**Reference**: Parameters match the recommended Winternitz configuration from [hash-sig instantiations](https://github.com/b-wagn/hash-sig/blob/main/src/signature/generalized_xmss/instantiations_poseidon_top_level.rs)
 
 ## Results Interpretation
 
